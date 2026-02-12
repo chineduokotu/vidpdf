@@ -90,7 +90,7 @@ export async function createPdfFromImages(images: File[]): Promise<Uint8Array> {
 }
 
 export function downloadBlob(data: Uint8Array, filename: string) {
-  const blob = new Blob([data], { type: 'application/pdf' })
+  const blob = new Blob([data as any], { type: 'application/pdf' })
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
   a.download = filename

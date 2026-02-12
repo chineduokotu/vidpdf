@@ -18,7 +18,7 @@ export async function imagesToPdf(files: File[]): Promise<Uint8Array> {
 }
 
 export function downloadBytes(data: Uint8Array, filename: string, mime: string) {
-  const blob = new Blob([data], { type: mime })
+  const blob = new Blob([data as any], { type: mime })
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
   a.download = filename
@@ -69,8 +69,8 @@ export async function pdfToExcel(file: File): Promise<Uint8Array> {
     const page = await pdf.getPage(i)
     const content = await page.getTextContent()
     const lines = content.items
-      .filter((x): x is { str: string } => 'str' in x)
-      .map((x) => x.str)
+      .filter((x: any) => 'str' in x)
+      .map((x: any) => x.str as string)
     const rows = lines.map((line) => [line])
     const ws = XLSX.utils.aoa_to_sheet(rows.length ? rows : [['']])
     XLSX.utils.book_append_sheet(wb, ws, `Page ${i}`)
