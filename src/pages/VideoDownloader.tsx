@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { HiVideoCamera, HiMagnifyingGlass, HiArrowDownTray } from 'react-icons/hi2'
+import { HiVideoCamera, HiMagnifyingGlass } from 'react-icons/hi2'
 import { FaYoutube, FaInstagram, FaTiktok, FaFacebook, FaXTwitter } from 'react-icons/fa6'
-import { fetchVideoInfo, formatDuration, formatSize, getDownloadUrl, type VideoInfo } from '../lib/videoApi'
+import { fetchVideoInfo, formatDuration, formatSize, startVideoDownload, fetchVideoProgress, getVideoRetrieveUrl, type VideoInfo } from '../lib/videoApi'
 import ProgressBar from '../components/ProgressBar'
 
 export default function VideoDownloader() {
@@ -10,6 +10,8 @@ export default function VideoDownloader() {
   const [loading, setLoading] = useState(false)
   const [progress, setProgress] = useState(0)
   const [downloading, setDownloading] = useState(false)
+  const [downloadProgress, setDownloadProgress] = useState(0)
+  const [downloadError, setDownloadError] = useState('')
 
   const handleFetch = async () => {
     setInfo(null)
@@ -28,17 +30,47 @@ export default function VideoDownloader() {
     if (e.key === 'Enter' && !loading && url.trim()) handleFetch()
   }
 
-  const handleDownload = (quality?: { format_id?: string; height?: number | null }) => {
-    const downloadUrl = getDownloadUrl(url, quality)
-    if (downloadUrl) {
-      setDownloading(true)
-      // Open in new window so we can detect when it starts
-      const link = document.createElement('a')
-      link.href = downloadUrl
-      link.target = '_blank'
-      link.click()
-      // Reset after a reasonable delay since we can't track the actual download
-      setTimeout(() => setDownloading(false), 5000)
+  const handleDownload = async (quality?: { format_id?: string; height?: number | null }) => {
+    setDownloading(true)
+    setDownloadProgress(1)
+    setDownloadError('')
+
+    try {
+      const progressId = await startVideoDownload(url, quality)
+
+      const poll = setInterval(async () => {
+        try {
+          const state = await fetchVideoProgress(progressId)
+
+          if (state.status === 'error') {
+            clearInterval(poll)
+            setDownloadError(state.error || 'Download failed on server')
+            setDownloading(false)
+            return
+          }
+
+          setDownloadProgress(state.progress)
+
+          if (state.status === 'complete') {
+            clearInterval(poll)
+            // Trigger automatic retrieval
+            const retrieveUrl = getVideoRetrieveUrl(progressId)
+            const link = document.createElement('a')
+            link.href = retrieveUrl
+            link.click()
+
+            setTimeout(() => {
+              setDownloading(false)
+              setDownloadProgress(0)
+            }, 3000)
+          }
+        } catch (err) {
+          console.error('Polling error:', err)
+        }
+      }, 2000)
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : 'Could not start download')
+      setDownloading(false)
     }
   }
 
@@ -71,6 +103,7 @@ export default function VideoDownloader() {
 
       {loading && <ProgressBar value={progress} label="Fetching video metadata…" />}
       {info?.error && <p className="error-msg">{info.error}</p>}
+      {downloadError && <p className="error-msg">{downloadError}</p>}
 
       {info && !info.error && (
         <div className="video-preview-section">
@@ -102,20 +135,39 @@ export default function VideoDownloader() {
                 key={i}
                 onClick={() => handleDownload(q)}
                 className="secondary"
-                disabled={!getDownloadUrl(url, q) || downloading}
+                disabled={downloading}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  padding: '12px 16px',
+                  minHeight: '80px',
+                  textAlign: 'center'
+                }}
               >
-                <HiArrowDownTray style={{ marginRight: '4px' }} /> {q.label}
+                <div style={{ fontWeight: 700, fontSize: '1.1rem', marginBottom: '4px' }}>
+                  {q.label} {(q.height || 0) >= 720 && <span className="hd-badge" style={{ backgroundColor: 'var(--accent)', color: 'white', padding: '2px 4px', borderRadius: '4px', fontSize: '0.65rem', verticalAlign: 'middle', marginLeft: '4px' }}>HD</span>}
+                </div>
+                <div style={{ fontSize: '0.8rem', opacity: 0.8 }}>
+                  {q.size ? formatSize(q.size) : 'Unknown size'} • {q.ext?.toUpperCase() || 'MP4'}
+                </div>
               </button>
             ))}
           </div>
 
           {downloading && (
-            <div className="download-status downloading">
-              Preparing your download… This may take a moment for large videos.
+            <div className="download-status downloading" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '0.5rem' }}>
+              <div>Processing Video… {downloadProgress > 0 ? `${downloadProgress}%` : 'Starting…'}</div>
+              <div className="progress-bar" style={{ width: '100%', margin: 0, height: '4px' }}>
+                <div style={{ width: `${Math.max(0, downloadProgress)}%` }}></div>
+              </div>
+              <div style={{ fontSize: '0.75rem', opacity: 0.8 }}>
+                The download will start automatically once processing is complete.
+              </div>
             </div>
           )}
 
-          {!getDownloadUrl(url, info.qualities[0]) && (
+          {!getVideoRetrieveUrl('dummy-id') && ( // Changed from getDownloadUrl to getVideoRetrieveUrl for consistency, though the original check was likely for API base URL presence.
             <p className="error-msg" style={{ marginTop: '0.75rem' }}>
               Set VITE_API_BASE_URL in .env and run the server to enable downloads.
             </p>

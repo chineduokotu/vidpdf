@@ -42,6 +42,12 @@ function App() {
           <Route path="/convert" element={<FileConverter />} />
         </Routes>
       </main>
+      <footer className="app-footer">
+        <p>by <span className="brand">CoMagTech</span></p>
+        <a href="https://www.tiktok.com/@script.guru6" target="_blank" rel="noopener noreferrer" className="tiktok-link">
+          TikTok @comagtech
+        </a>
+      </footer>
     </div>
   )
 }

@@ -1,21 +1,43 @@
 import { apiUrl } from '../api'
 
-/** Builds the backend download URL for a video (requires VITE_API_BASE_URL). Uses height for merged video+audio. */
-export function getDownloadUrl(videoUrl: string, quality?: { format_id?: string; height?: number | null }): string {
-  const base = apiUrl('/api/download')
+/** Starts a background download on the server and returns a progressId */
+export async function startVideoDownload(videoUrl: string, quality?: { format_id?: string; height?: number | null }): Promise<string> {
+  const base = apiUrl('/api/video-download-start')
   if (!base) return ''
   const params = new URLSearchParams({ url: videoUrl })
   if (quality?.height) params.set('height', String(quality.height))
-  return `${base}?${params.toString()}`
+
+  const res = await fetch(`${base}?${params.toString()}`)
+  if (!res.ok) throw new Error(await res.text())
+  const data = await res.json()
+  return data.progressId
 }
 
-export type VideoQuality = { label: string; height?: number; url?: string; format_id?: string }
+/** Fetches current download state */
+export async function fetchVideoProgress(id: string): Promise<{ progress: number; status: string; error?: string }> {
+  const url = apiUrl(`/api/video-progress?id=${id}`)
+  if (!url) return { progress: 0, status: 'error' }
+  try {
+    const res = await fetch(url)
+    if (!res.ok) return { progress: 0, status: 'error' }
+    return await res.json()
+  } catch {
+    return { progress: 0, status: 'error' }
+  }
+}
+
+/** Gets the final retrieval URL for a finished download */
+export function getVideoRetrieveUrl(id: string): string {
+  return apiUrl(`/api/video-download-retrieve?id=${id}`)
+}
+
+export type VideoQuality = { label: string; height?: number; url?: string; format_id?: string; size?: number | null; ext?: string }
 
 export type VideoInfo = {
   title: string
   duration?: number
   thumbnail?: string
-  size?: number    
+  size?: number
   qualities: VideoQuality[]
   error?: string
 }
