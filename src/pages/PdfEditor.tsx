@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import {
   HiDocumentText,
   HiDocumentDuplicate,
@@ -44,6 +44,61 @@ export default function PdfEditor() {
   const [annotateText, setAnnotateText] = useState('')
   const [annotateX, setAnnotateX] = useState(50)
   const [annotateY, setAnnotateY] = useState(50)
+  const [splitRangesText, setSplitRangesText] = useState('')
+
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [pdfScale, setPdfScale] = useState(1)
+
+  useEffect(() => {
+    if (tool !== 'annotate' || !files[0]) return
+    let cancelled = false
+
+    const renderPage = async () => {
+      try {
+        const pdfjsLib = await import('pdfjs-dist')
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`
+
+        const buf = await files[0].arrayBuffer()
+        const pdf = await pdfjsLib.getDocument(buf).promise
+        if (cancelled) return
+
+        const pageIdx = Math.max(1, Math.min(annotatePage, pdf.numPages))
+        const page = await pdf.getPage(pageIdx)
+        if (cancelled) return
+
+        const viewport = page.getViewport({ scale: 1 })
+        const canvas = canvasRef.current
+        if (!canvas) return
+
+        const maxWidth = 600
+        const scale = viewport.width > maxWidth ? maxWidth / viewport.width : 1
+        setPdfScale(scale)
+
+        const scaledViewport = page.getViewport({ scale })
+        canvas.width = scaledViewport.width
+        canvas.height = scaledViewport.height
+
+        const ctx = canvas.getContext('2d')!
+        await page.render({ canvasContext: ctx, viewport: scaledViewport }).promise
+      } catch (e) {
+        console.error('Failed to render PDF preview', e)
+      }
+    }
+    renderPage()
+
+    return () => {
+      cancelled = true
+    }
+  }, [tool, files, annotatePage])
+
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!canvasRef.current) return
+    const rect = canvasRef.current.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const y = e.clientY - rect.top
+    setAnnotateX(Math.round(x / pdfScale))
+    setAnnotateY(Math.round(y / pdfScale))
+  }
 
   const currentTool = pdfTools.find((t) => t.id === tool)!
 
@@ -63,10 +118,53 @@ export default function PdfEditor() {
     if (!files[0]) { setError('Upload a PDF first.'); return }
     setError(''); setBusy(true); setProgress(0)
     try {
-      const ranges = [{ start: 0, end: 0 }]
+      const ranges: { start: number; end: number }[] = []
+      if (!splitRangesText.trim()) {
+        throw new Error('Please specify a page range (e.g., "1-3, 5")')
+      }
+      
+      const parts = splitRangesText.split(',')
+      for (const p of parts) {
+        const s = p.trim()
+        if (!s) continue
+        if (s.includes('-')) {
+          const [startStr, endStr] = s.split('-')
+          const start = parseInt(startStr, 10)
+          const end = parseInt(endStr, 10)
+          if (isNaN(start) || isNaN(end) || start < 1 || end < start) {
+            throw new Error(`Invalid range format: ${s}`)
+          }
+          ranges.push({ start: start - 1, end: end - 1 })
+        } else {
+          const n = parseInt(s, 10)
+          if (isNaN(n) || n < 1) {
+            throw new Error(`Invalid page number: ${s}`)
+          }
+          ranges.push({ start: n - 1, end: n - 1 })
+        }
+      }
+
+      if (ranges.length === 0) throw new Error('No valid ranges provided')
+
       const out = await splitPdf(files[0], ranges)
-      downloadBlob(out[0], 'split.pdf')
-      setMessage('✅ First page downloaded.')
+      
+      if (out.length === 1) {
+        downloadBlob(out[0], 'split.pdf')
+        setMessage('✅ Split PDF downloaded.')
+      } else {
+        const JSZip = (await import('jszip')).default
+        const zip = new JSZip()
+        out.forEach((pdfData, index) => {
+          zip.file(`split-part-${index + 1}.pdf`, pdfData)
+        })
+        const zipBlob = await zip.generateAsync({ type: 'blob' })
+        const a = document.createElement('a')
+        a.href = URL.createObjectURL(zipBlob)
+        a.download = 'split-pdfs.zip'
+        a.click()
+        URL.revokeObjectURL(a.href)
+        setMessage(`✅ Split into ${out.length} PDFs and downloaded as a ZIP file.`)
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Split failed')
     } finally { setBusy(false) }
@@ -182,6 +280,16 @@ export default function PdfEditor() {
         )}
 
         {/* Tool-specific options */}
+        {tool === 'split' && (
+          <div className="option-row">
+            <input
+              placeholder="Ranges to split into separate PDFs (e.g. 1-3, 5, 7-10)"
+              value={splitRangesText}
+              onChange={(e) => setSplitRangesText(e.target.value)}
+              style={{ flex: 1, maxWidth: 360 }}
+            />
+          </div>
+        )}
         {tool === 'rotate' && (
           <div className="option-row">
             <label style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Rotation angle:</label>
@@ -210,21 +318,45 @@ export default function PdfEditor() {
               placeholder="Text to add…"
               value={annotateText}
               onChange={(e) => setAnnotateText(e.target.value)}
-              style={{ width: '100%' }}
+              style={{ width: '100%', marginBottom: '1rem' }}
             />
-            <div className="annotate-coords">
+            {files.length > 0 && (
+              <div style={{ position: 'relative', border: '1px solid var(--border)', background: '#fff', borderRadius: '4px', overflow: 'hidden', margin: '0 auto', width: 'fit-content' }}>
+                <p style={{ position: 'absolute', top: 10, left: 10, background: 'rgba(0,0,0,0.6)', color: '#fff', padding: '4px 8px', borderRadius: '4px', fontSize: '0.8rem', pointerEvents: 'none' }}>
+                  Click on the document to place text
+                </p>
+                <canvas
+                  ref={canvasRef}
+                  onClick={handleCanvasClick}
+                  style={{ display: 'block', cursor: 'crosshair', maxWidth: '100%' }}
+                />
+                {annotateX > 0 && annotateY > 0 && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      left: annotateX * pdfScale,
+                      top: annotateY * pdfScale,
+                      color: 'red',
+                      fontSize: `${12 * pdfScale}px`,
+                      pointerEvents: 'none',
+                      whiteSpace: 'nowrap',
+                      transform: 'translateY(-100%)',
+                      fontFamily: 'Helvetica, Arial, sans-serif'
+                    }}
+                  >
+                    {annotateText || 'Sample Text'}
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="annotate-coords" style={{ marginTop: '1rem', display: 'flex', gap: '1rem', alignItems: 'center' }}>
               <label>
                 Page
-                <input type="number" min={1} value={annotatePage} onChange={(e) => setAnnotatePage(Number(e.target.value))} />
+                <input type="number" min={1} value={annotatePage} onChange={(e) => setAnnotatePage(Number(e.target.value))} style={{ width: '60px', marginLeft: '0.5rem' }} />
               </label>
-              <label>
-                X
-                <input type="number" value={annotateX} onChange={(e) => setAnnotateX(Number(e.target.value))} />
-              </label>
-              <label>
-                Y
-                <input type="number" value={annotateY} onChange={(e) => setAnnotateY(Number(e.target.value))} />
-              </label>
+              <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                Position: X: {annotateX}, Y: {annotateY}
+              </div>
             </div>
           </div>
         )}

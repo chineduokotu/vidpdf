@@ -136,10 +136,17 @@ export default function WatermarkRemover() {
   }
 
   const processBatch = async () => {
-    if (!files.length) return
+    if (!files.length || !selecting || selecting.w < 2 || selecting.h < 2) return
     setBusy(true)
     setProgress(0)
     const results: string[] = []
+    
+    const scale = scaleRef.current
+    const x = Math.round(selecting.x * scale)
+    const y = Math.round(selecting.y * scale)
+    const w = Math.round(selecting.w * scale)
+    const h = Math.round(selecting.h * scale)
+
     for (let i = 0; i < files.length; i++) {
       setCurrentIndex(i)
       const img = await loadImage(files[i])
@@ -148,7 +155,7 @@ export default function WatermarkRemover() {
       canvas.height = img.height
       const ctx = canvas.getContext('2d')!
       ctx.drawImage(img, 0, 0)
-      const out = removeWatermarkFromCanvas(canvas, 0, 0, 0, 0)
+      const out = removeWatermarkFromCanvas(canvas, x, y, w, h)
       const blob = await imageToBlob(out, files[i].type || 'image/png')
       results.push(URL.createObjectURL(blob))
       setProgress(((i + 1) / files.length) * 100)
@@ -216,7 +223,7 @@ export default function WatermarkRemover() {
                   {busy ? '⏳ Processing…' : <><HiPaintBrush /> Remove selected area</>}
                 </button>
                 {files.length > 1 && (
-                  <button className="secondary" onClick={processBatch} disabled={busy}>
+                  <button className="secondary" onClick={processBatch} disabled={!selecting || selecting.w < 2 || busy}>
                     <HiArrowPath /> Process all ({files.length})
                   </button>
                 )}
